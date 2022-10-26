@@ -1,5 +1,6 @@
 from pddl_parser import PDDL, action
 from pprint import pprint
+# from queue import PriorityQueue as priority_queue
 
 DOMAIN_FILE = '/home/roomba1/16.413/padm_project_2022F/pddl/kitchen.pddl'
 PROBLEM_FILE = '/home/roomba1/16.413/padm_project_2022F/pddl/pb1.pddl'
@@ -18,16 +19,17 @@ class Planner:
         if self.is_goal(init_state):
             return []
 
-        # Initialize state space search
-        explored_states = set([init_state])
-        queue = [(init_state, [])]
-
         #BFS
         if search == 'bfs':
-            return self.bfs(queue, explored_states, self.parser.actions)
+            explored_states = set([init_state])
+            queue = [(init_state, [])]
+            return self.bfs(queue, explored_states, self.parser.actions, self.is_goal)
 
         elif search == 'ff':
             return self.ff(init_state, self.parser.actions)
+
+        elif search == 'enforced_hill_climbing_with_ff':
+            return self.enforced_hill_climbing_with_ff(init_state, self.parser.actions)
 
 
     def valid(self, state, p_precons, n_precons):
@@ -65,10 +67,10 @@ class Planner:
         goals[level - 1] = [*effects]
         return goals
 
-    def bfs(self, queue, explored_states, actions):
+    def bfs(self, queue, explored_states, actions, terminal_funct):
         while queue:
             cur_state, cur_plan = queue.pop(0)
-            for action in self.parser.actions:
+            for action in actions:
                 plan = cur_plan.copy()
                 p_precons = action.positive_preconditions
                 n_precons = action.negative_preconditions
@@ -78,11 +80,37 @@ class Planner:
                     plan.append(action.name)
                     next_state = self.forward(cur_state, p_effects, n_effects)
                     if next_state not in explored_states:
-                        if self.is_goal(next_state):
-                            return plan
+                        if terminal_funct(next_state):
+                            return (next_state, plan)
                         else:
                             explored_states.add(next_state)
                             queue.insert(-1, (next_state, plan))
+
+    def enforced_hill_climbing_with_ff(self, init_state, actions):
+        explored_states = set([init_state])
+        queue = [(init_state, [])]
+        plan = []
+        relaxed_plan, heuristic = self.ff(init_state, actions)
+        while heuristic != 0:
+            pprint("Plan: {}\
+                    Heuristic: {}".format(plan, heuristic))
+            import ipdb; ipdb.set_trace()
+            heur_funct = self.partial_ff_heuristic_comp(heuristic, actions)
+            next_state, bfs_plan = self.bfs(queue, explored_states, actions, heur_funct)
+            queue = [(next_state, [])]
+            explored_states = set([next_state])
+            plan += bfs_plan
+            relaxed_plan, heuristic = self.ff(next_state, actions)
+        return plan
+
+    def partial_ff_heuristic_comp(self, heuristic, actions):
+        def better_ff(state):
+            _, new_heuristic = self.ff(state, actions)
+            if new_heuristic < heuristic:
+                return True
+            else:
+                return False
+        return better_ff
 
     def ff(self, init_state, actions):
         graphplan = self.ff_graph(init_state, actions)
@@ -104,17 +132,25 @@ class Planner:
                     next_actions.append(action.name)
                     next_state = self.fast_forward(cur_state, p_effects, n_effects)
                     next_states += [*next_state]
-            if self.is_goal(next_states):
+            if self.is_goal(set(next_states)):
                 graph.append(([*cur_state], [*set(next_actions)]))
                 graph.append(([*set(next_states)], None))
                 return graph
-            else:
-                graph.append(([*cur_state], [*set(next_actions)]))
-                cur_state = set(next_states)
+            if len(graph) > 0:
+                last_state_layer, _ = graph[-1]
+                if set(next_states) == set(last_state_layer):
+                    return graph
+            graph.append(([*cur_state], [*set(next_actions)]))
+            cur_state = set(next_states)
 
     def ff_heuristic(self, graphplan):
         goal_firsts = [[]] * len(graphplan)
         action_firsts = [[]] * len(graphplan)
+
+        final_state_layer, _ = graphplan[-1]
+
+        if not self.is_goal(set(final_state_layer)):
+            return (None, float('inf'))
 
         # Find first levels at which goals and actions appear
         for i in range(0, len(graphplan)):
@@ -148,11 +184,8 @@ class Planner:
             relaxed_plan[i-1] = [*set(actions)]
         return (relaxed_plan, heuristic)
 
-    def enforced_hill_climbing(self, queue, explored_states, actions):
-        raise NotImplementedError
-
 if __name__ == '__main__':
     p = Planner(DOMAIN_FILE, PROBLEM_FILE)
-    plan, heuristic = p.plan(search='ff')
+    plan = p.plan(search='enforced_hill_climbing_with_ff')
     pprint(plan)
-    pprint(heuristic)
+    # pprint(heuristic)
