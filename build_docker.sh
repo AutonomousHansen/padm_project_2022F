@@ -1,0 +1,1 @@
+sudo docker build -t padm-project-2022f .
