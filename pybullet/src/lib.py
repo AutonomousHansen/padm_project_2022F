@@ -2,8 +2,10 @@ from __future__ import print_function
 
 import os
 import sys
+import treelib
 import argparse
 import numpy as np
+from math import dist
 
 sys.path.extend('/app/padm-project-2022f/' + d for d in ['pddlstream', 'ss-pybullet'])
 
@@ -43,10 +45,7 @@ def pose2d_on_surface(world, entity_name, surface_name, pose2d=UNIT_POSE2D):
 add_sugar_box = lambda world, **kwargs: add_ycb(world, 'sugar_box', **kwargs)
 add_spam_box = lambda world, **kwargs: add_ycb(world, 'potted_meat_can', **kwargs)
 
-def get_base_sample_fn(body):
-    pass
-
-def get_gripper_sample_fn(body, joints, custom_limits={}, **kwargs):
+def get_sample_fn(body, joints, custom_limits={}, **kwargs):
     lower_limits, upper_limits = get_custom_limits(body, joints, custom_limits, circular_limits=CIRCULAR_LIMITS)
     generator = interval_generator(lower_limits, upper_limits, **kwargs)
     def fn():
@@ -74,43 +73,35 @@ def build_panda_world():
     print('Arm Joints', [get_joint_name(world.robot, joint) for joint in world.arm_joints])
     return world, tool_link
 
-def gripper_ik_plan(world, tool_link, start_pose=None, end_pose=None):
-    sample_fn = get_gripper_sample_fn(world.robot, world.arm_joints)
-    print("Going to use IK to go from a sample start state to a goal state\n")
+def panda_arm_sample(world):
+    sample_fn = get_sample_fn(world.robot, world.arm_joints)
     conf = sample_fn()
+    print(conf)
     set_joint_positions(world.robot, world.arm_joints, conf)
-    ik_joints = get_ik_joints(world.robot, PANDA_INFO, tool_link)
-    if start_pose is None:
-        start_pose = get_link_pose(world.robot, tool_link)
-    print("Start Pose: {}".format(start_pose))
-    if end_pose is None:
-        end_pose = multiply(start_pose, Pose(Point(x=0.5)))
-    goal_box = create_box_at_pose(end_pose)
-    print("End Pose: {}".format(end_pose))
+    return conf
+    # ik_joints = get_ik_joints(world.robot, PANDA_INFO, tool_link)
+    # start_pose = get_link_pose(world.robot, tool_link)
 
-    confs = []
-    for pose in interpolate_poses(start_pose, end_pose, pos_step_size=0.01):
-        conf = next(closest_inverse_kinematics(world.robot, PANDA_INFO, tool_link, pose, max_time=0.05), None)
-        val, collision = single_collision_with_reporting(world.robot)
-        if conf is None:
-            print('Failure!')
-            remove_body(goal_box)
-            return None
-        elif val:
-            print(collision)
-            print("Collision! {}".format(get_joint_name(world.robot, collision)))
-            remove_body(goal_box)
-            return None
-        confs.append(conf)
-        set_joint_positions(world.robot, ik_joints, conf)
-    remove_body(goal_box)
-    return confs
 
-def baselink_plan(world, tool_link, start_pose=None, end_pose=None):
-    if start_pose is None:
-        start_pose = get_link_pose(world.robot, world.base_link)
-    print("Start Pose: {}".format(start_pose))
-    if end_pose is None:
-        end_pose = multiply(start_pose, Pose(Point(x=0.5)))
-    wps = [start_pose, end_pose]
-    return plan_cartesian_motion(world.robot, world.base_link, world.base_link, waypoint_poses=wps)
+def panda_base_sample(world):
+    sample_fn = get_sample_fn(world.robot, world.base_joints)
+    conf = sample_fn()
+    print(conf)
+    set_joint_positions(world.robot, world.base_joints, conf)
+
+def nearest_base_conf(world, conf, past_confs):
+    # TODO: Implement as a KDTree for speed
+    proposed_pose = get_pose(conf)
+    min_dist = float('inf')
+    min_conf = None
+    for conf in past_confs:
+        # Doing position-only distance on first pass
+        # TODO: Incorporate orientation distance
+        set_joint_positions(world.robot, world.base_joints, conf)
+        past_pose = get_pose(conf)
+        dist = dist((past_pose[0], past_pose[1], past_pose[2]), \
+                    (proposed_pose[0],proposed_pose[1],proposed_pose[2]))
+        if dist < min_dist:
+            min_dist = dist
+            min_conf = conf
+    return min_conf
