@@ -10,14 +10,14 @@ from itertools import cycle
 from collections import namedtuple
 
 from pybullet_tools.pr2_primitives import Conf
-from pybullet_tools.pr2_utils import get_top_grasps, get_side_grasps, close_until_collision
+from pybullet_tools.pr2_utils import get_top_grasps, get_side_grasps
 from pybullet_tools.utils import joints_from_names, joint_from_name, Attachment, link_from_name, get_unit_vector, \
     unit_pose, BodySaver, multiply, Pose, \
     get_link_subtree, clone_body, get_all_links, invert, get_link_pose, set_pose, interpolate_poses, set_color, LockRenderer, get_body_name, randomize, unit_point, create_obj, BASE_LINK, get_link_descendants, \
     get_aabb, get_collision_data, point_from_pose, get_data_pose, get_data_extents, AABB, \
     apply_affine, get_aabb_vertices, aabb_from_points, read_obj, tform_mesh, create_attachment, draw_point, \
     child_link_from_joint, is_placed_on_aabb, pairwise_collision, flatten_links, has_link, get_difference_fn, Euler, approximate_as_prism, \
-    get_joint_positions, implies, unit_from_theta
+    get_joint_positions, implies, unit_from_theta, get_max_limit, get_min_limit, set_joint_positions
 
 MODELS_PATH = '/app/padm-project-2022f/models'
 
@@ -474,6 +474,35 @@ class Grasp(object):
     def __repr__(self):
         return '{}({}, {})'.format(self.__class__.__name__, self.grasp_type, self.index)
 
+def panda_extend_fn(resolution=0.01, max=0.04, min=0.0):
+    # norm = 1, 2, INF
+    gripper_range = np.arange(min, max, resolution)[1:-1]
+    gripper_confs = [[x,x] for x in gripper_range]
+    return gripper_confs
+
+# Copied wholesale from pr2_utils
+def close_until_collision(robot, gripper_joints, bodies=[], open_conf=None, closed_conf=None, num_steps=25, collision_links=None, **kwargs):
+    if not gripper_joints:
+        return None
+    if open_conf is None:
+        open_conf = [get_max_limit(robot, joint) for joint in gripper_joints]
+    if closed_conf is None:
+        closed_conf = [get_min_limit(robot, joint) for joint in gripper_joints]
+    resolutions = np.abs(np.array(open_conf) - np.array(closed_conf)) / num_steps
+    print(open_conf, closed_conf)
+    close_path = [open_conf] + panda_extend_fn()
+    
+    if type(collision_links) is int:
+        collision_links = frozenset(set([collision_links])) 
+
+    for i, conf in enumerate(close_path):
+        set_joint_positions(robot, gripper_joints, conf)
+        if any(pairwise_collision((robot, collision_links), body, **kwargs) for body in bodies):
+            if i == 0:
+                return None
+            return close_path[i-1][0]
+    return close_path[-1][0]
+
 def get_grasps(world, name, grasp_types=GRASP_TYPES, pre_distance=APPROACH_DISTANCE, **kwargs):
     use_width = world.robot_name == FRANKA_CARTER
     body = world.get_body(name)
@@ -521,7 +550,7 @@ def get_grasps(world, name, grasp_types=GRASP_TYPES, pre_distance=APPROACH_DISTA
                 grasp.get_attachment().assign()
                 with BodySaver(world.robot):
                     grasp.grasp_width = close_until_collision(
-                        world.robot, world.gripper_joints, bodies=[body])
+                        world.robot, world.gripper_joints, bodies=[body], collision_links=link_from_name(world.robot, 'panda_hand'))
             #print(get_joint_positions(world.robot, world.arm_joints)[-1])
             #draw_pose(unit_pose(), parent=world.robot, parent_link=world.tool_link)
             #grasp.get_attachment().assign()

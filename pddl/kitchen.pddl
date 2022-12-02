@@ -8,7 +8,6 @@
     (gripper_empty)
     (gripping_spam)
     (gripping_sugar)
-    (gripping_drawer)
     (sugar_on_stovetop)
     (sugar_on_countertop)
     (spam_on_stovetop)
@@ -18,10 +17,7 @@
     (drawer_closed)
   )
   (:action move_to_spawning_stovetop
-    :precondition (and
-                  (not (at_spawning_stovetop))
-                  (not (gripping_drawer))
-    )
+    :precondition ()
     :effect (and
             (at_spawning_stovetop)
             (not (at_spawning_countertop))
@@ -29,10 +25,7 @@
             )
   )
   (:action move_to_spawning_countertop
-    :precondition (and
-                  (not (at_spawning_countertop))
-                  (not (gripping_drawer))
-    )
+    :precondition ()
     :effect (and
         (at_spawning_countertop)
         (not (at_spawning_stovetop))
@@ -61,23 +54,6 @@
       (gripping_spam)
     )
   )
-  (:action grip_drawer
-    :precondition (and
-                  (gripper_empty)
-                  (at_spawning_countertop)
-                )
-    :effect (and
-      (not (gripper_empty))
-      (gripping_drawer)
-    )
-  )
-  (:action release_drawer
-    :precondition (gripping_drawer)
-    :effect (and
-            (not (gripping_drawer))
-            (gripper_empty)
-    )
-  )
   (:action place_sugar_on_countertop
     :precondition (and
                   (gripping_sugar)
@@ -100,7 +76,8 @@
   )
   (:action open_drawer
     :precondition (and
-                  (gripping_drawer)
+                  (at_spawning_countertop)
+                  (gripper_empty)
                   (drawer_closed)
     )
     :effect (and
@@ -110,11 +87,17 @@
   )
   (:action close_drawer
     :precondition (and
-                  (gripping_drawer)
+                  (at_spawning_countertop)
+                  (gripper_empty)
                   (drawer_open)
     )
     :effect (and
             (drawer_closed)
             (not (drawer_open))
-    )  )
+    )
+  )
+  (:action noop
+    :precondition ()
+    :effect ()
+  )
 )
