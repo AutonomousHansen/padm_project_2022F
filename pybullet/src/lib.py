@@ -20,7 +20,8 @@ from pybullet_tools.utils import CIRCULAR_LIMITS, PANDA_HAND_URDF, get_custom_li
                                  get_box_geometry, remove_body, NULL_ID, STATIC_MASS, plan_cartesian_motion, quat_from_euler, is_pose_close, \
                                  set_base_values, pose_from_base_values, draw_aabb, AABB, sample_placement_on_aabb, aabb2d_from_aabb, get_aabb_center, \
                                  get_aabb_extent, unit_pose, base_values_from_pose, aabb_contains_aabb, get_configuration, set_configuration, get_movable_joints,\
-                                 get_joint_positions
+                                 get_joint_positions, body_from_end_effector, end_effector_from_body, Attachment, create_attachment, approach_from_grasp, invert, sub_inverse_kinematics, \
+                                 get_max_limit, get_min_limit, get_max_limits, get_min_limits, get_joint_axis, multiply, draw_pose, get_local_link_pose, get_relative_pose, get_link_ancestors, get_link_children   
 
 from pybullet_tools.ikfast.franka_panda.ik import PANDA_INFO, FRANKA_URDF
 from pybullet_tools.ikfast.ikfast import get_ik_joints, closest_inverse_kinematics
@@ -30,7 +31,7 @@ from utils import JOINT_TEMPLATE, BLOCK_SIZES, BLOCK_COLORS, COUNTERS, \
     ALL_JOINTS, LEFT_CAMERA, CAMERA_MATRIX, CAMERA_POSES, CAMERAS, compute_surface_aabb, \
     BLOCK_TEMPLATE, name_from_type, GRASP_TYPES, SIDE_GRASP, joint_from_name, \
     STOVES, TOP_GRASP, randomize, LEFT_DOOR,  APPROACH_DISTANCE, point_from_pose, translate_linearly, \
-    get_grasps, set_tool_pose, get_tool_from_root
+    get_grasps, set_tool_pose, get_tool_from_root, get_tool_link, iterate_approach_path, RelPose, pose_from_attachment
 
 UNIT_POSE2D = (0., 0., 0.)
 STEER_DISTANCE = 0.15
@@ -45,13 +46,15 @@ BASE_LENGTH = 0.634
 KITCHEN_ID = 0
 FLOOR_ID = 1
 BASE_BUFFER = 0.2
-DEF_SUGAR_POSE = ((-0.815248060685189, 0.65, -1.2301278283276562), (0.0, 0.0, 0.0, 1.0))
-DEF_MEAT_POSE = ((-0.815248060685189, 0.85, -1.2301278283276562), (0.0, 0.0, 0.0, 1.0))
+# DEF_SUGAR_POSE = ((-1.26, 0.70, -1.2301278283276562), (0.0, 0.0, 0.0, 1.0))
+DEF_SUGAR_POSE = ((-0.70, -0.2, -1.2301278283276562), (0.0, 0.0, 0.3826834559440613, 0.9238795042037964))
+DEF_MEAT_POSE = ((-1.2, 0.85, -1.2301278283276562), (0.0, 0.0, 0.0, 1.0))
 access_poses = {
     'sugar_box0' : DEF_SUGAR_POSE,
     'potted_meat_can1' : DEF_MEAT_POSE
 }
-
+extended_arms = [0.0, 1.5, 0.0, 0.0, -0.00025768374325707555, 3.0363450050354004, 0.7410701513290405]
+grip_sugar = ((-0.0934628039598465, 0.5329028606414795, -0.39798504114151), (0.3826833963394165, 0.9238795638084412, -5.657131222642009e-17, -2.3432597385528782e-17))
 def add_ycb(world, ycb_type, idx=0, counter=0, **kwargs):
     name = name_from_type(ycb_type, idx)
     world.add_body(name, color=np.ones(4))
@@ -94,7 +97,7 @@ def build_panda_world(gui=True):
     sugar_box = add_sugar_box(world, idx=0, counter=1, pose2d=(-0.2, 0.65, np.pi / 4))
     spam_box = add_spam_box(world, idx=1, counter=0, pose2d=(0.2, 1.1, np.pi / 4))
     world._update_initial()
-    tool_link = link_from_name(world.robot, 'panda_hand')
+    tool_link = link_from_name(world.robot, 'right_gripper')
     joints = get_movable_joints(world.robot)
     print('Base Joints', [get_joint_name(world.robot, joint) for joint in world.base_joints])
     print('Arm Joints', [get_joint_name(world.robot, joint) for joint in world.arm_joints])
@@ -142,6 +145,10 @@ def nearest_base_pose(world, proposed_pose, past_poses):
             min_pose = past_pose
     print("Min Pose: {}".format(min_pose))
     return min_pose
+
+def panda_gripper_closest_ik_conf(world, pose):
+    conf = next(closest_inverse_kinematics(world.robot, PANDA_INFO, world.tool_link, pose, max_time=0.05), None)
+    return conf
 
 def base_to_node_collisionfree(world, tool_link, pose1, pose2):
     # set_joint_positions(world.robot, world.base_joints, conf1)
@@ -415,3 +422,43 @@ def base_rrt_and_play(goal='sugar_box0'):
     play_poses(w,poses)
     # arm_rrt(w, goal)
     return w
+
+def arm_at_pose(world, target_pose):
+    return plan_cartesian_motion(world.robot, world.arm_joints[0], world.tool_link, [target_pose])
+
+def arm_at_pose_ik(world, target_pose):
+    conf = next(closest_inverse_kinematics(world.robot, PANDA_INFO, world.tool_link, target_pose, max_time=0.05), None)
+    return conf
+
+def test_arm_at_pose(goal='sugar_box0', w=None):
+    if not w:
+        w,t=build_panda_world()
+    set_pose(w.robot, access_poses[goal])
+    w.open_gripper()
+    tool_link_pose = get_link_pose(w.robot, w.tool_link)
+    anc = get_link_ancestors(w.robot, w.tool_link)
+    grasps = get_grasps(w, goal)
+    obj_pose = get_pose(w.get_body(goal))
+    grasp = next(grasps, None)
+    draw_pose(parent=w.robot, parent_link=anc[-1], pose=tool_link_pose)
+    init_config = get_configuration(w.robot)
+    while not grasp is None:
+        goal_pose = multiply(obj_pose, invert(grasp.pregrasp_pose))
+        draw_pose(parent=w.robot, parent_link=anc[-1], pose=goal_pose)
+        for pose in interpolate_poses(tool_link_pose, goal_pose, pos_step_size=0.01):
+            conf = arm_at_pose(w,pose)
+            if conf:
+                set_configuration(w.robot, conf[0])
+                sleep(0.1)
+            else:
+                new_tool_link_pose = get_link_pose(w.robot, w.tool_link)
+                if is_pose_close(new_tool_link_pose, goal_pose):
+                    print("Pose close!")
+                    return w, get_configuration(w.robot)
+                    
+            # confs2 = arm_at_pose_ik(w,pose)
+            # if confs2:
+            #     print("Success2")
+            #     return w, (confs2, goal_pose, grasp)
+        grasp = next(grasps, None)
+    return w, (conf, goal_pose, grasp)

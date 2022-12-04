@@ -550,7 +550,7 @@ def get_grasps(world, name, grasp_types=GRASP_TYPES, pre_distance=APPROACH_DISTA
                 grasp.get_attachment().assign()
                 with BodySaver(world.robot):
                     grasp.grasp_width = close_until_collision(
-                        world.robot, world.gripper_joints, bodies=[body], collision_links=link_from_name(world.robot, 'panda_hand'))
+                        world.robot, world.gripper_joints, bodies=[body], collision_links=world.tool_link)
             #print(get_joint_positions(world.robot, world.arm_joints)[-1])
             #draw_pose(unit_pose(), parent=world.robot, parent_link=world.tool_link)
             #grasp.get_attachment().assign()
